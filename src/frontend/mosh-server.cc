@@ -34,6 +34,7 @@
 
 #include <errno.h>
 #include <locale.h>
+#include <sstream>
 #include <string.h>
 #include <termios.h>
 #include <unistd.h>
@@ -54,6 +55,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #ifdef HAVE_UTMPX_H
 #include <utmpx.h>
@@ -93,7 +95,8 @@ typedef Network::Transport< Terminal::Complete, Network::UserStream > ServerConn
 
 void serve( int host_fd,
 	    Terminal::Complete &terminal,
-	    ServerConnection &network );
+	    ServerConnection &network,
+            string pipename );
 
 int run_server( const char *desired_ip, const char *desired_port,
 		const string &command_path, char *command_argv[],
@@ -371,14 +374,15 @@ int run_server( const char *desired_ip, const char *desired_port,
     exit( 1 );
   }
 
-  /* detach from terminal */
-  pid_t the_pid = fork();
-  if ( the_pid < 0 ) {
-    perror( "fork" );
-  } else if ( the_pid > 0 ) {
-    _exit( 0 );
+  if (!verbose) {
+    /* detach from terminal */
+    pid_t the_pid = fork();
+    if ( the_pid < 0 ) {
+      perror( "fork" );
+    } else if ( the_pid > 0 ) {
+      _exit( 0 );
+    }
   }
-
   fprintf( stderr, "\nmosh-server (%s)\n", PACKAGE_STRING );
   fprintf( stderr, "Copyright 2012 Keith Winstein <mosh-devel@mit.edu>\n" );
   fprintf( stderr, "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\n" );
@@ -483,8 +487,12 @@ int run_server( const char *desired_ip, const char *desired_port,
     utempter_add_record( master, utmp_entry );
 #endif
 
+    stringstream pipess;
+    pipess << "/tmp/.mosh_" << getpid();
+    mknod(pipess.str().c_str(), S_IFIFO | 0600, 0);
+
     try {
-      serve( master, terminal, *network );
+      serve( master, terminal, *network, pipess.str() );
     } catch ( const Network::NetworkException& e ) {
       fprintf( stderr, "Network exception: %s: %s\n",
 	       e.function.c_str(), strerror( e.the_errno ) );
@@ -492,6 +500,8 @@ int run_server( const char *desired_ip, const char *desired_port,
       fprintf( stderr, "Crypto exception: %s\n",
 	       e.text.c_str() );
     }
+
+    unlink(pipess.str().c_str());
 
     #ifdef HAVE_UTEMPTER
     utempter_remove_record( master );
@@ -504,18 +514,55 @@ int run_server( const char *desired_ip, const char *desired_port,
 
     delete network;
   }
-
+      
   printf( "\n[mosh-server is exiting.]\n" );
 
   return 0;
 }
 
-void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network )
+void handle_fw_hole_request(ServerConnection &network, int pipe_fd) {
+  /* udp hole punching for firewall */
+  /* if we encounter an error, we just continue on*/
+  char buf[512] = { '\0' };
+  char ip[512] = { '\0' };
+
+  int num = read(pipe_fd, buf, 512);
+  if ( num < 0 ) {
+    return; /* read failed */
+  }
+  buf[num] = '\0';    
+  
+  int port = 0;
+  if ( sscanf( buf, "%s %d", ip, &port ) != 2 ) {
+    return; /* bad format */
+  }
+
+  struct sockaddr_in addr;
+  addr.sin_family=AF_INET;
+  if ( inet_aton( ip, &(addr.sin_addr) ) == 0 ) {
+    return; /* bad format, again */
+  }    
+  addr.sin_port = htons( (short)port );
+  
+  int s = network.fds().back();
+  /* try to send an empty dummy packet to the desired host/port to trick a
+     stateful firewall into forwarding packets from said host/port to us. */
+  int r = sendto(s, NULL, 0, MSG_EOR, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
+  if ( r < 0 ) {
+    return;
+  }
+}
+
+
+void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network, string pipename )
 {
   /* prepare to poll for events */
   Select &sel = Select::get_instance();
   sel.add_signal( SIGTERM );
   sel.add_signal( SIGINT );
+
+  int pipe_fd=open(pipename.c_str(), O_RDONLY| O_NDELAY);
+  sel.add_fd( pipe_fd );
 
   uint64_t last_remote_num = network.get_remote_state_num();
 
@@ -543,6 +590,7 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
       int network_fd = fd_list.back();
       sel.add_fd( network_fd );
       sel.add_fd( host_fd );
+      sel.add_fd( pipe_fd );
 
       int active_fds = sel.select( timeout );
       if ( active_fds < 0 ) {
@@ -650,6 +698,12 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
 	}
       }
 
+      if ( sel.read( pipe_fd ) ) {
+        handle_fw_hole_request(network, pipe_fd);
+        close(pipe_fd);
+        pipe_fd = open(pipename.c_str(), O_RDONLY| O_NDELAY); 
+      }
+
       if ( sel.any_signal() ) {
 	/* shutdown signal */
 	if ( network.has_remote_addr() && (!network.shutdown_in_progress()) ) {
@@ -729,6 +783,7 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
       }
     }
   }
+  close(pipe_fd);
 }
 
 /* OpenSSH prints the motd on startup, so we will too */
