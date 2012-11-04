@@ -528,18 +528,21 @@ void handle_fw_hole_request(ServerConnection &network, int pipe_fd) {
 
   int num = read(pipe_fd, buf, 512);
   if ( num < 0 ) {
+    fprintf(stderr, "Read of pipe fd %d failed", pipe_fd);
     return; /* read failed */
   }
   buf[num] = '\0';    
   
   int port = 0;
   if ( sscanf( buf, "%s %d", ip, &port ) != 2 ) {
+    fprintf(stderr, "Read of pipe bad format: \"%s\"", buf);
     return; /* bad format */
   }
 
   struct sockaddr_in addr;
   addr.sin_family=AF_INET;
   if ( inet_aton( ip, &(addr.sin_addr) ) == 0 ) {
+    fprintf(stderr, "Read of pipe failed to set address: IP: \"%s\" port: %d", ip, port);
     return; /* bad format, again */
   }    
   addr.sin_port = htons( (short)port );
@@ -549,6 +552,7 @@ void handle_fw_hole_request(ServerConnection &network, int pipe_fd) {
      stateful firewall into forwarding packets from said host/port to us. */
   int r = sendto(s, NULL, 0, MSG_EOR, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
   if ( r < 0 ) {
+    fprintf(stderr, "Read of pipe send failed to address: IP: \"%s\" port: %d", ip, port);
     return;
   }
 }
