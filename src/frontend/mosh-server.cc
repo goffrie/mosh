@@ -555,6 +555,7 @@ void handle_fw_hole_request(ServerConnection &network, int pipe_fd) {
     fprintf(stderr, "Read of pipe send failed to address: IP: \"%s\" port: %d", ip, port);
     return;
   }
+  fprintf(stderr, "Read of pipe sending to address: \"%s\" port: %d", ip, port);
 }
 
 
