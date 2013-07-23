@@ -102,13 +102,17 @@ int main( int argc, char *argv[] )
   fatal_assert( argc > 0 );
 
   /* Get arguments */
-  int opt;
-  while ( (opt = getopt( argc, argv, "c" )) != -1 ) {
+  int opt = 0;
+  char* client_port = 0;
+  while ( (opt = getopt( argc, argv, "cp:" )) != -1 ) {
     switch ( opt ) {
     case 'c':
       print_colorcount();
       exit( 0 );
       break;
+    case 'p':
+	client_port = optarg;
+	break;
     default:
       usage( argv[ 0 ] );
       exit( 1 );
@@ -117,7 +121,7 @@ int main( int argc, char *argv[] )
   }
 
   char *ip, *desired_port;
-  int port;
+  int port = 0, cport = 0;
 
   if ( argc - optind != 2 ) {
     usage( argv[ 0 ] );
@@ -142,7 +146,15 @@ int main( int argc, char *argv[] )
     exit( 1 );
   }
 
+  if ( client_port
+       && ( strspn( client_port, "0123456789" ) != strlen( client_port ) ) ) {
+    fprintf( stderr, "%s: Bad UDP client port (%s)\n\n", argv[ 0 ], client_port );
+    usage( argv[ 0 ] );
+    exit( 1 );
+  }
+
   port = myatoi( desired_port );
+  cport = myatoi( client_port );
 
   /* Read key from environment */
   char *env_key = getenv( "MOSH_KEY" );
@@ -170,7 +182,7 @@ int main( int argc, char *argv[] )
   set_native_locale();
 
   try {
-    STMClient client( ip, port, key, predict_mode );
+    STMClient client( ip, port, key, predict_mode, cport );
     client.init();
 
     try {

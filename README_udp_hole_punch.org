@@ -1,0 +1,60 @@
+Feature addition of UDP Hole Punching to mosh
+
+* What is it
+
+Many firewalls allow UDP outbound and inbound responses.  If the
+most-server is listening behind such a firewall mosh-client can't
+reach it directly.  However, if the server sends out a UDP packet on
+the bound socket to the client (who may or may not receive it) then
+the firewall will retain an opening for any subsequent packets sent
+from client to server.
+
+* How it works
+
+The original work was done by Philipp Klenze:
+
+ - https://github.com/klenze/mosh
+ - https://github.com/keithw/mosh/pull/287
+ - http://www.mail-archive.com/mosh-devel@mit.edu/msg00008.html
+
+and reintegrated after mosh development changed enough to make his
+patch no longer apply.
+
+The basic mechanism is for mosh-server to listen on a pipe for
+messages of the form: "<ipnumber> <port>" and then send a packet to
+that destination.  The pipe is a file =/tmp/.mosh_<PID>= named after
+the server's process ID.  This PID is printed by the server on start
+up and so available to the initial invoking process.
+
+To inject such a message something needs access to the pipe file.
+Initially, Klenze solves this by using a custom script (see his email
+above) to replace the usual =mosh= script to start the client and
+server.  It writes a small secondary script that will SSH to the
+server to inject the client's IP/port (based on =SSH_CONNECTION= being
+set by the SSH server).  The idea is to run this generated script on
+the client side at start up and whenever the client roams.  Klenze
+started hooks in mosh-client to run this script from there but they
+were left as stubs.
+
+Normally mosh-client binds to an unspecific port for sending.  For
+this mechanism to work this port has to be known by the updating
+scripts so it can be reported to the server.  The mosh-client is
+modified to allow setting the client port on the command line (Klenze
+originally used an environment variable).
+
+* Caveats
+
+This method is not full-proof and will fail if the server can not be
+notified of a usable IP and port of the client.  Potential modes of
+failure include:
+
+ - The client is behind NAT and the client's port is not the same as
+   the one the NAT router exposes.
+
+ - The IP number as reported by the environment variable
+   =SSH_CONNECTION= is not the external IP.  
+
+This last one can happen if the mosh server is not directly accessed
+by the SSH connection, for example if an intermediate SSH server was
+first accessed.  
+

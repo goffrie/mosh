@@ -55,8 +55,9 @@ Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState 
 
 template <class MyState, class RemoteState>
 Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState &initial_remote,
-					    const char *key_str, const char *ip, int port )
-  : connection( key_str, ip, port ),
+					    const char *key_str, const char *ip, int port,
+                                            int client_port )
+  : connection( key_str, ip, port, client_port ),
     sender( &connection, initial_state ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     receiver_quench_timer( 0 ),

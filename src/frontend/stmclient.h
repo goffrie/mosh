@@ -54,6 +54,8 @@ private:
   bool escape_requires_lf;
   std::wstring escape_key_help;
 
+  int client_port;
+
   struct termios saved_termios, raw_termios;
 
   struct winsize window_size;
@@ -83,10 +85,12 @@ private:
   void resume( void ); /* restore state after SIGCONT */
 
 public:
-  STMClient( const char *s_ip, int s_port, const char *s_key, const char *predict_mode )
+  STMClient( const char *s_ip, int s_port, const char *s_key, const char *predict_mode, 
+             int cport )
     : ip( s_ip ), port( s_port ), key( s_key ),
     escape_key( 0x1E ), escape_pass_key( '^' ), escape_pass_key2( '^' ),
     escape_requires_lf( false ), escape_key_help( L"?" ),
+      client_port(cport),
       saved_termios(), raw_termios(),
       window_size(),
       local_framebuffer( NULL ),
