@@ -219,7 +219,7 @@ int main( int argc, char *argv[] )
 
   /* Sanity-check arguments */
   if ( desired_ip
-       && ( strspn( desired_ip, "0123456789." ) != strlen( desired_ip ) ) ) {
+       && ( strspn( desired_ip, "0123456789abcdef.:" ) != strlen( desired_ip ) ) ) {
     fprintf( stderr, "%s: Bad IP address (%s)\n", argv[ 0 ], desired_ip );
     print_usage( argv[ 0 ] );
     exit( 1 );
@@ -509,12 +509,12 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
 
   uint64_t last_remote_num = network.get_remote_state_num();
 
-  #ifdef HAVE_UTEMPTER
-  bool connected_utmp = false;
+  //#ifdef HAVE_UTEMPTER
+  //bool connected_utmp = false;
 
-  struct in_addr saved_addr;
-  saved_addr.s_addr = 0;
-  #endif
+  //struct in_addr saved_addr;
+  //saved_addr.s_addr = 0;
+  //#endif
 
   while ( 1 ) {
     try {
@@ -582,21 +582,22 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
 	    break;
 	  }
 
-	  #ifdef HAVE_UTEMPTER
-	  /* update utmp entry if we have become "connected" */
-	  if ( (!connected_utmp)
-	       || ( saved_addr.s_addr != network.get_remote_ip().s_addr ) ) {
-	    utempter_remove_record( host_fd );
+	  // TODO
+	  //#ifdef HAVE_UTEMPTER
+	  ///* update utmp entry if we have become "connected" */
+	  //if ( (!connected_utmp)
+	  //     || ( saved_addr.s_addr != network.get_remote_ip().s_addr ) ) {
+	  //  utempter_remove_record( host_fd );
 
-	    saved_addr = network.get_remote_ip();
+	  //  saved_addr = network.get_remote_ip();
 
-	    char tmp[ 64 ];
-	    snprintf( tmp, 64, "%s via mosh [%d]", inet_ntoa( saved_addr ), getpid() );
-	    utempter_add_record( host_fd, tmp );
+	  //  char tmp[ 64 ];
+	  //  snprintf( tmp, 64, "%s via mosh [%d]", inet_ntoa( saved_addr ), getpid() );
+	  //  utempter_add_record( host_fd, tmp );
 
-	    connected_utmp = true;
-	  }
-	  #endif
+	  //  connected_utmp = true;
+	  //}
+	  //#endif
 	}
       }
       
@@ -670,20 +671,20 @@ void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &network
 	break;
       }
 
-      #ifdef HAVE_UTEMPTER
-      /* update utmp if has been more than 10 seconds since heard from client */
-      if ( connected_utmp ) {
-	if ( time_since_remote_state > 10000 ) {
-	  utempter_remove_record( host_fd );
+      //  #ifdef HAVE_UTEMPTER
+      //  /* update utmp if has been more than 10 seconds since heard from client */
+      //  if ( connected_utmp ) {
+	  //if ( time_since_remote_state > 10000 ) {
+	  //  utempter_remove_record( host_fd );
 
-	  char tmp[ 64 ];
-	  snprintf( tmp, 64, "mosh [%d]", getpid() );
-	  utempter_add_record( host_fd, tmp );
+      //    char tmp[ 64 ];
+      //    snprintf( tmp, 64, "mosh [%d]", getpid() );
+      //    utempter_add_record( host_fd, tmp );
 
-	  connected_utmp = false;
-	}
-      }
-      #endif
+      //    connected_utmp = false;
+      //  }
+      //}
+      //#endif
 
       if ( terminal.set_echo_ack( now ) ) {
 	/* update client with new echo ack */
