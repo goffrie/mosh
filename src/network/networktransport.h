@@ -100,7 +100,7 @@ namespace Network {
 
     unsigned int send_interval( void ) const { return sender.send_interval(); }
 
-    const struct in_addr & get_remote_ip( void ) const { return connection.get_remote_ip(); }
+    //const struct in_addr & get_remote_ip( void ) const { return connection.get_remote_ip(); }
   };
 }
 
