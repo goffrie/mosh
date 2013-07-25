@@ -91,11 +91,12 @@ namespace Network {
     static const int PORT_RANGE_LOW  = 60001;
     static const int PORT_RANGE_HIGH = 60999;
 
-    static bool try_bind( int socket, uint32_t s_addr, int port );
+    bool try_bind( const char *node, int port );
 
     int sock;
     bool has_remote_addr;
-    struct sockaddr_in remote_addr;
+    struct sockaddr_storage remote_addr;
+    int remote_addr_len;
 
     bool server;
 
@@ -104,7 +105,7 @@ namespace Network {
     Base64Key key;
     Session session;
 
-    void setup( void );
+    void setup( int family, int socktype, int protocol );
 
     Direction direction;
     uint64_t next_seq;
@@ -140,7 +141,7 @@ namespace Network {
     uint64_t timeout( void ) const;
     double get_SRTT( void ) const { return SRTT; }
 
-    const struct in_addr & get_remote_ip( void ) const { return remote_addr.sin_addr; }
+    //const struct in_addr & get_remote_ip( void ) const { return remote_addr.sin_addr; }
 
     const NetworkException *get_send_exception( void ) const
     {
