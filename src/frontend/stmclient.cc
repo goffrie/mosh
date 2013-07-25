@@ -33,6 +33,7 @@
 #include "config.h"
 
 #include <errno.h>
+#include <climits>
 #include <locale.h>
 #include <string.h>
 #include <unistd.h>

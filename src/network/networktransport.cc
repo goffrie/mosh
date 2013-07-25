@@ -31,6 +31,7 @@
 */
 
 #include <iostream>
+#include <climits>
 
 #include "networktransport.h"
 

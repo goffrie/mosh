@@ -149,7 +149,7 @@ void Connection::hop_port( void )
     throw NetworkException( "close", errno );
   }
 
-  setup();
+  assert(!"Not implemented");
 }
 
 void Connection::setup( int family, int socktype, int protocol )
@@ -522,7 +522,7 @@ string Connection::recv( void )
     if ( server ) { /* only client can roam */
       if ( !addreq(&remote_addr, &packet_remote_addr) ) {
         remote_addr = packet_remote_addr;
-	remote_addr_len = addrlen;
+	remote_addr_len = sizeof( packet_remote_addr );
         // TODO
         //fprintf( stderr, "Server now attached to client at %s:%d\n",
         //         inet_ntoa( remote_addr.sin_addr ),

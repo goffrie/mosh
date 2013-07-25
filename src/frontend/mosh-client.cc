@@ -34,6 +34,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <climits>
 #include <getopt.h>
 
 #include "stmclient.h"

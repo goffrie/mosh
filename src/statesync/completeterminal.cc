@@ -30,6 +30,7 @@
     also delete it here.
 */
 
+#include <climits>
 #include "completeterminal.h"
 #include "fatal_assert.h"
 
