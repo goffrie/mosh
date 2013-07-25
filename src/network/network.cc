@@ -32,8 +32,10 @@
 
 #include "config.h"
 
+#include <sys/un.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <assert.h>
@@ -59,6 +61,38 @@ using namespace Crypto;
 
 const uint64_t DIRECTION_MASK = uint64_t(1) << 63;
 const uint64_t SEQUENCE_MASK = uint64_t(-1) ^ DIRECTION_MASK;
+
+int
+addreq (const sockaddr_storage *a, const sockaddr_storage *b)
+{
+  if (a->ss_family != b->ss_family)
+    return 0;
+  switch (a->ss_family) {
+  case AF_INET:
+    {
+      const struct sockaddr_in *aa = (const struct sockaddr_in *) a;
+      const struct sockaddr_in *bb = (const struct sockaddr_in *) b;
+      return (aa->sin_addr.s_addr == bb->sin_addr.s_addr
+              && aa->sin_port == bb->sin_port);
+    }
+  case AF_INET6:
+    {
+      const struct sockaddr_in6 *aa = (const struct sockaddr_in6 *) a;
+      const struct sockaddr_in6 *bb = (const struct sockaddr_in6 *) b;
+      return (!memcmp (&aa->sin6_addr, &bb->sin6_addr, sizeof (aa->sin6_addr))
+              && aa->sin6_port == bb->sin6_port);
+    }
+  case AF_UNIX:
+    {
+      const struct sockaddr_un *aa = (const struct sockaddr_un *) a;
+      const struct sockaddr_un *bb = (const struct sockaddr_un *) b;
+      return !strcmp (aa->sun_path, bb->sun_path);
+    }
+  }
+  fprintf (stderr, "addrhash: unknown address family %d\n",
+           a->ss_family);
+  abort ();
+}
 
 /* Read in packet from coded string */
 Packet::Packet( string coded_packet, Session *session )
@@ -113,10 +147,14 @@ Packet Connection::new_packet( string &s_payload )
   return p;
 }
 
-void Connection::setup( void )
+void Connection::setup( int family, int socktype, int protocol )
 {
+  if ( sock >= 0 )
+    close(sock);
+
   /* create socket */
-  sock = socket( AF_INET, SOCK_DGRAM, 0 );
+  sock = socket( family, socktype, protocol );
+  // TODO: nein
   if ( sock < 0 ) {
     throw NetworkException( "socket", errno );
   }
@@ -141,6 +179,7 @@ Connection::Connection( const char *desired_ip, const char *desired_port ) /* se
   : sock( -1 ),
     has_remote_addr( false ),
     remote_addr(),
+    remote_addr_len( 0 ),
     server( true ),
     MTU( SEND_MTU ),
     key(),
@@ -156,8 +195,6 @@ Connection::Connection( const char *desired_ip, const char *desired_port ) /* se
     have_send_exception( false ),
     send_exception()
 {
-  setup();
-
   /* The mosh wrapper always gives an IP request, in order
      to deal with multihomed servers. The port is optional. */
 
@@ -180,33 +217,24 @@ Connection::Connection( const char *desired_ip, const char *desired_port ) /* se
     throw NetworkException( "Port number outside valid range [0..65535]", 0 );
   }
 
-  /* convert desired IP */
-  uint32_t desired_ip_addr = INADDR_ANY;
-
+  /* try to bind to desired IP first, if any */
   if ( desired_ip ) {
-    struct in_addr sin_addr;
-    if ( inet_aton( desired_ip, &sin_addr ) == 0 ) {
-      throw NetworkException( "Invalid IP address", errno );
-    }
-    desired_ip_addr = sin_addr.s_addr;
-  }
-
-  /* try to bind to desired IP first */
-  if ( desired_ip_addr != INADDR_ANY ) {
     try {
-      if ( try_bind( sock, desired_ip_addr, desired_port_no ) ) { return; }
+      if ( try_bind( desired_ip, desired_port_no ) ) { return; }
     } catch ( const NetworkException& e ) {
+      /* TODO 
       struct in_addr sin_addr;
       sin_addr.s_addr = desired_ip_addr;
       fprintf( stderr, "Error binding to IP %s: %s: %s\n",
 	       inet_ntoa( sin_addr ),
 	       e.function.c_str(), strerror( e.the_errno ) );
+               */
     }
   }
 
   /* now try any local interface */
   try {
-    if ( try_bind( sock, INADDR_ANY, desired_port_no ) ) { return; }
+    if ( try_bind( NULL, desired_port_no ) ) { return; }
   } catch ( const NetworkException& e ) {
     fprintf( stderr, "Error binding to any interface: %s: %s\n",
 	     e.function.c_str(), strerror( e.the_errno ) );
@@ -217,11 +245,21 @@ Connection::Connection( const char *desired_ip, const char *desired_port ) /* se
   throw NetworkException( "Could not bind", errno );
 }
 
-bool Connection::try_bind( int socket, uint32_t s_addr, int port )
+bool Connection::try_bind( const char *node, int port )
 {
-  struct sockaddr_in local_addr;
-  local_addr.sin_family = AF_INET;
-  local_addr.sin_addr.s_addr = s_addr;
+  struct addrinfo hints;
+  struct addrinfo *result, *rp;
+  char portstr[6];
+  int ret;
+
+  memset(&hints, '\0', sizeof(struct addrinfo));
+  /* Use UDP */
+  hints.ai_socktype = SOCK_DGRAM;
+  /* Use either IPv4 or IPv6, whichever is preferred */
+  hints.ai_family = AF_UNSPEC;
+  /* Request a listening socket (node == NULL will mean INADDR_ANY in the
+   * correct protocol family) */
+  hints.ai_flags = AI_PASSIVE;
 
   int search_low = PORT_RANGE_LOW, search_high = PORT_RANGE_HIGH;
 
@@ -230,15 +268,36 @@ bool Connection::try_bind( int socket, uint32_t s_addr, int port )
   }
 
   for ( int i = search_low; i <= search_high; i++ ) {
-    local_addr.sin_port = htons( i );
+    snprintf(portstr, sizeof(portstr), "%u", i);
 
-    if ( bind( socket, (sockaddr *)&local_addr, sizeof( local_addr ) ) == 0 ) {
-      return true;
-    } else if ( i == search_high ) { /* last port to search */
-      fprintf( stderr, "Failed binding to %s:%d\n",
-	       inet_ntoa( local_addr.sin_addr ),
-	       ntohs( local_addr.sin_port ) );
+    ret = getaddrinfo(node, portstr, &hints, &result);
+    if ( ret != 0 ) {
+      fprintf(stderr, "Failed resolving %s:%u: %s\n",
+              node, port, gai_strerror(ret));
+      // XXX: Does this exception type assume that the second argument is an
+      // errno? Because in our case, we need to call gai_strerror
+      throw NetworkException( "Could not resolve", ret );
+    }
+
+    for ( rp = result; rp != NULL; rp = rp->ai_next ) {
+      setup( rp->ai_family, rp->ai_socktype, rp->ai_protocol );
+
+      if ( bind( sock, rp->ai_addr, rp->ai_addrlen ) == 0 )
+        break; /* Success */
+      int bind_errno = errno;
+
+      char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+      if ( getnameinfo( rp->ai_addr, rp->ai_addrlen, hbuf, sizeof(hbuf),
+                        sbuf, sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV ) == 0 )
+        fprintf(stderr, "Warning: Could not bind to %s:%s: %s\n", hbuf, sbuf, strerror(bind_errno));
+    }
+
+    if ( rp == NULL && i == search_high ) { /* last port to search */
       throw NetworkException( "bind", errno );
+    }
+
+    if ( rp ) {
+      return true;
     }
   }
 
@@ -250,6 +309,7 @@ Connection::Connection( const char *key_str, const char *ip, int port ) /* clien
   : sock( -1 ),
     has_remote_addr( false ),
     remote_addr(),
+    remote_addr_len( 0 ),
     server( false ),
     MTU( SEND_MTU ),
     key( key_str ),
@@ -265,16 +325,38 @@ Connection::Connection( const char *key_str, const char *ip, int port ) /* clien
     have_send_exception( false ),
     send_exception()
 {
-  setup();
+  struct addrinfo hints;
+  struct addrinfo *result, *rp;
+  char portstr[6];
+  int ret;
 
-  /* associate socket with remote host and port */
-  remote_addr.sin_family = AF_INET;
-  remote_addr.sin_port = htons( port );
-  if ( !inet_aton( ip, &remote_addr.sin_addr ) ) {
-    int saved_errno = errno;
-    char buffer[ 2048 ];
-    snprintf( buffer, 2048, "Bad IP address (%s)", ip );
-    throw NetworkException( buffer, saved_errno );
+  memset(&hints, '\0', sizeof(struct addrinfo));
+  /* Use UDP */
+  hints.ai_socktype = SOCK_DGRAM;
+  /* Use either IPv4 or IPv6, whichever is preferred */
+  hints.ai_family = AF_UNSPEC;
+
+  snprintf(portstr, sizeof(portstr), "%u", port);
+
+  ret = getaddrinfo(ip, portstr, &hints, &result);
+  if ( ret != 0 ) {
+    fprintf(stderr, "Failed resolving %s:%u: %s\n",
+            ip, port, gai_strerror(ret));
+    // XXX: Does this exception type assume that the second argument is an
+    // errno? Because in our case, we need to call gai_strerror
+    throw NetworkException( "Could not resolve", ret );
+  }
+
+  for ( rp = result; rp != NULL; rp = rp->ai_next ) {
+    setup( rp->ai_family, rp->ai_socktype, rp->ai_protocol );
+
+    memcpy( &remote_addr, rp->ai_addr, rp->ai_addrlen );
+    remote_addr_len = rp->ai_addrlen;
+    break;
+  }
+
+  if ( rp == NULL ) {
+    throw NetworkException( "bind", errno );
   }
 
   has_remote_addr = true;
@@ -289,7 +371,7 @@ void Connection::send( string s )
   string p = px.tostring( &session );
 
   ssize_t bytes_sent = sendto( sock, p.data(), p.size(), 0,
-			       (sockaddr *)&remote_addr, sizeof( remote_addr ) );
+			       (sockaddr *)&remote_addr, remote_addr_len );
 
   if ( bytes_sent == static_cast<ssize_t>( p.size() ) ) {
     have_send_exception = false;
@@ -304,7 +386,7 @@ void Connection::send( string s )
 
 string Connection::recv( void )
 {
-  struct sockaddr_in packet_remote_addr;
+  struct sockaddr_storage packet_remote_addr;
 
   char buf[ Session::RECEIVE_MTU ];
 
@@ -359,12 +441,13 @@ string Connection::recv( void )
     has_remote_addr = true;
 
     if ( server ) { /* only client can roam */
-      if ( (remote_addr.sin_addr.s_addr != packet_remote_addr.sin_addr.s_addr)
-	   || (remote_addr.sin_port != packet_remote_addr.sin_port) ) {
-	remote_addr = packet_remote_addr;
-	fprintf( stderr, "Server now attached to client at %s:%d\n",
-		 inet_ntoa( remote_addr.sin_addr ),
-		 ntohs( remote_addr.sin_port ) );
+      if ( !addreq(&remote_addr, &packet_remote_addr) ) {
+        remote_addr = packet_remote_addr;
+	remote_addr_len = addrlen;
+        // TODO
+        //fprintf( stderr, "Server now attached to client at %s:%d\n",
+        //         inet_ntoa( remote_addr.sin_addr ),
+        //         ntohs( remote_addr.sin_port ) );
       }
     }
   }
@@ -374,14 +457,21 @@ string Connection::recv( void )
 
 int Connection::port( void ) const
 {
-  struct sockaddr_in local_addr;
+  struct sockaddr_storage local_addr;
+  char portstr[6];
   socklen_t addrlen = sizeof( local_addr );
 
   if ( getsockname( sock, (sockaddr *)&local_addr, &addrlen ) < 0 ) {
     throw NetworkException( "getsockname", errno );
   }
 
-  return ntohs( local_addr.sin_port );
+  if ( getnameinfo( (const struct sockaddr*)&local_addr, addrlen, NULL, 0,
+                    portstr, sizeof(portstr), NI_NUMERICSERV) < 0 ) {
+    throw NetworkException( "getnameinfo", errno );
+  }
+
+  /* No error checking since getnameinfo() returns a valid numeric port. */
+  return strtol( portstr, NULL, 10 );
 }
 
 uint64_t Network::timestamp( void )
